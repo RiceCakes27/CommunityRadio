@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Community Radio</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: auto;
+      padding: 1rem;
+    }
+  
+    #searchResults li,
+    #queueList li {
+      padding: 5px;
+      border-bottom: 1px solid #ddd;
+    }
+
+    #searchResults li {
+      cursor: pointer;
+    }
+  
+    #searchResults li:hover {
+      background: #eef;
+    }
+  
+    #nowPlaying {
+      margin: 1rem 0;
+      font-weight: bold;
+    }
+    #resultsContainer {
+      position: relative;
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      backdrop-filter: blur(6px);
+      background: rgba(255, 255, 255, 0.3);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+    }
+
+    #spinner {
+      width: 60px;
+      height: 60px;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+  </style>
+</head>
+<body>
+
+  <h1>Community Radio</h1>
+
+  <input type="text" id="searchInput" placeholder="Search YouTube Music..." autocomplete="off" />
+  <div id="resultsContainer">
+    <ul id="searchResults"></ul>
+    <div id="overlay">
+      <img src="load.svg" id="spinner" alt="Loading...">
+    </div>
+  </div>
+
+  <div id="nowPlaying">Nothing playing yet.</div>
+  <audio id="player" controls autoplay style="width: 100%;"></audio>
+
+  <h3>Queue:</h3>
+  <ul id="queueList"></ul>
+
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" integrity="sha384-mkQ3/7FUtcGyoppY6bz/PORYoGqOl7/aSUMn2ymDOJcapfS6PHqxhRTMh1RR0Q6+" crossorigin="anonymous"></script>
+  <script>
+    const searchInput = document.getElementById('searchInput');
+    const searchResults = document.getElementById('searchResults');
+    const nowPlaying = document.getElementById('nowPlaying');
+    const queueList = document.getElementById('queueList');
+    const player = document.getElementById('player');
+
+    const socket = io({ path: '/ws' });
+
+    socket.on('message', (raw) => {
+      let data;
+      try {
+        data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      } catch {
+        return;
+      }
+      if (data.type === 'update') {
+        if (data.current) {
+          const filename = data.current.filename;
+          nowPlaying.textContent = `Now Playing: ${data.current.title}`;
+          if (player.src !== `/stream/${filename}`) {
+            player.src = `/stream/${encodeURIComponent(filename)}`;
+          }
+          // Only seek if difference > 1s to avoid jitter
+          const desiredTime = data.current.elapsed / 1000;
+          if (Math.abs(player.currentTime - desiredTime) > 1) {
+            player.currentTime = desiredTime;
+          }
+          player.play();
+        } else {
+          nowPlaying.textContent = 'Nothing playing yet.';
+          player.pause();
+          player.src = '';
+        }
+
+        queueList.innerHTML = '';
+        if (Array.isArray(data.queue)) {
+          data.queue.forEach(song => {
+            const li = document.createElement('li');
+            li.textContent = song.title;
+            queueList.appendChild(li);
+            document.getElementById('overlay').style.display = 'none';
+          });
+        }
+      }
+    });
+
+    let searchTimeout = null;
+
+    searchInput.addEventListener('input', () => {
+      if (searchTimeout) clearTimeout(searchTimeout);
+      const query = searchInput.value.trim();
+      if (!query) {
+        searchResults.innerHTML = '';
+        return;
+      }
+      searchTimeout = setTimeout(() => {
+        fetch(`/api/search?q=${encodeURIComponent(query)}`)
+          .then(res => res.json())
+          .then(data => {
+            searchResults.innerHTML = '';
+            if (data.results && data.results.length > 0) {
+              data.results.forEach(song => {
+                const li = document.createElement('li');
+                li.textContent = song.title;
+                li.title = song.title;
+                li.style.userSelect = 'none';
+                li.addEventListener('click', () => {
+                  document.getElementById('overlay').style.display = 'flex';
+
+                  fetch('/api/queue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ videoId: song.videoId })
+                  }).then(res => {
+                    if (res.ok) {
+                      searchInput.value = '';
+                      searchResults.innerHTML = '';
+                    } else {
+                      alert('Failed to add song to queue');
+                    }
+                  });
+                });
+                searchResults.appendChild(li);
+              });
+            } else {
+              searchResults.textContent = 'No results found.';
+            }
+          }).catch(() => {
+            searchResults.textContent = 'Search failed.';
+          });
+      }, 500); // debounce 500ms
+    });
+  </script>
+</body>
+</html>
