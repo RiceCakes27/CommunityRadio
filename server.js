@@ -2,14 +2,14 @@ const express = require('express');
 const { spawn } = require('child_process');
 const { Server } = require('socket.io');
 const http = require('http');
-const youtubedl = require('yt-dlp-exec');
 const fs = require('fs');
-const https = require('https');
+//const https = require('https');
 const path = require('path');
 const ffprobe = require('ffprobe-static');
 require('dotenv').config();
+const axios = require('axios');
+const ffmpegPath = require('ffmpeg-static');
 
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY; // Set this in your environment
 const PORT = process.env.PORT;
 const app = express();
 const server = http.createServer(app);
@@ -19,74 +19,78 @@ const io = new Server(server, {
 
 let queue = [];
 let current = null;
-let startTime = null;
 let currentTimeout = null;
 
-function broadcastQueue() {
-  const elapsed = current && startTime ? Date.now() - startTime : 0;
-  io.emit('message', JSON.stringify({
-    type: 'update',
-    current: current ? { ...current, filename: path.basename(current.filepath), elapsed } : null,
-    queue: queue.map(song => ({ ...song, filename: path.basename(song.filepath) }))
-  }));
-}
-
-function sanitizeFilename(str) {
-  return str.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-}
-
-async function getDurationMs(filepath) {
-  return new Promise((resolve) => {
-    const ff = spawn(ffprobe.path, [
-      '-v', 'error',
-      '-show_entries', 'format=duration',
-      '-of', 'default=noprint_wrappers=1:nokey=1',
-      filepath
+async function broadcastQueue() {
+  try {
+    // Fetch current song and queue in parallel
+    const [songRes, queueRes] = await Promise.all([
+      axios.get("http://localhost:26538/api/v1/song"),
+      axios.get("http://localhost:26538/api/v1/queue")
     ]);
 
-    let output = '';
-    ff.stdout.on('data', d => output += d);
-    ff.on('close', () => {
-      const dur = parseFloat(output);
-      if (!isNaN(dur)) resolve(dur * 1000);
-      else {
-        console.warn(`Could not get duration for: ${filepath}, defaulting to 3 minutes`);
-        resolve(3 * 60 * 1000);
-      }
+    // Normalize responses
+    const currentRaw = songRes?.data ?? null;
+    //const queueRaw = Array.isArray(queueRes?.data) ? queueRes.data : (queueRes?.data?.items[0].playlistPanelVideoRenderer.title.runs[0] ?? []);
+    const items = queueRes?.data?.items ?? [];
+    // Find index of currently selected item
+    const selectedIndex = items.findIndex(
+      item => item?.playlistPanelVideoRenderer?.selected === true
+    );
+
+    // Get only the items AFTER the selected one
+    const upcomingItems = selectedIndex >= 0 ? items.slice(selectedIndex + 1) : items;
+
+    // Convert those into parsed song objects
+    const queueRaw = upcomingItems
+      .map(item => {
+        const r = item?.playlistPanelVideoRenderer;
+        if (!r) return null;
+
+        return {
+          title: r.title?.runs?.[0]?.text ?? "Unknown Title"
+        };
+      })
+      .filter(Boolean);
+
+    // Map a single song to the expected /api/v1/song shape with safe defaults
+    const mapSong = (s) => ({
+      title: s?.title ?? (s?.filename ? path.basename(s.filename) : ""),
+      //artist: s?.artist ?? "Unknown Artist",
+      //views: typeof s?.views === "number" ? s.views : 0,
+      //uploadDate: s?.uploadDate ?? "",
+      //imageSrc: s?.imageSrc ?? "",
+      //songDuration: typeof s?.songDuration === "number" ? s.songDuration : 0,
+      //elapsedSeconds: typeof s?.elapsedSeconds === "number" ? s.elapsedSeconds : 0,
+      //url: s?.url ?? "",
+      //album: s?.album ?? "",
+      //videoId: s?.videoId ?? "",
     });
 
-    ff.on('error', (err) => {
-      console.error(`ffprobe failed for ${filepath}:`, err);
-      resolve(3 * 60 * 1000);
+    const current = currentRaw ? mapSong(currentRaw) : null;
+    const queue = queueRaw.map(song => {
+      const mapped = mapSong(song);
+      // user example wanted filename: song.title — add it explicitly
+      return { ...mapped, filename: mapped.text };
     });
-  });
-}
 
-async function downloadSong(videoId) {
-  const metadata = await youtubedl(`https://www.youtube.com/watch?v=${videoId}`, {
-    dumpSingleJson: true,
-    noWarnings: true,
-    addHeader: [
-      'referer:youtube.com',
-      'user-agent:Mozilla/5.0'
-    ]
-  });
+    // Emit once, after data is ready
+    io.emit("message", JSON.stringify({
+      type: "update",
+      current,
+      queue
+    }));
 
-  const title = metadata.title || `video_${videoId}`;
-  const filename = sanitizeFilename(title) + '.mp3';
-  const filepath = path.join(__dirname, 'songs', filename);
+  } catch (err) {
+    // Log error and still emit a safe update so clients won't hang
+    console.error("broadcastQueue error:", err?.message ?? err);
 
-  if (!fs.existsSync(filepath)) {
-    await youtubedl(`https://www.youtube.com/watch?v=${videoId}`, {
-      output: filepath,
-      extractAudio: true,
-      audioFormat: 'mp3'
-    });
+    io.emit("message", JSON.stringify({
+      type: "update",
+      current: null,
+      queue: []
+    }));
   }
-
-  const durationMs = await getDurationMs(filepath);
-
-  return { title, filename, filepath, videoId, durationMs };
 }
 
 async function playNext() {
@@ -112,65 +116,63 @@ async function playNext() {
   }, next.durationMs);
 }
 
-async function fallbackYtDlpSearch(query, res) {
-  try {
-    const result = await youtubedl(`ytsearch5:${query} music`, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      noCheckCertificates: true,
-      addHeader: [
-        'referer:youtube.com',
-        'user-agent:Mozilla/5.0'
-      ]
-    });
-
-    const results = result.entries.map(entry => ({
-      title: entry.title,
-      videoId: entry.id
-    }));
-
-    res.json({ results });
-  } catch (err) {
-    res.status(500).json({ error: 'Search failed', details: err.toString() });
-  }
-}
-
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/search', async (req, res) => {
   const query = req.query.q;
   if (!query) return res.json({ results: [] });
-
-  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&maxResults=5&q=${encodeURIComponent(query)}&key=${YOUTUBE_API_KEY}`;
-  https.get(url, (apiRes) => {
-    let raw = '';
-    apiRes.on('data', chunk => raw += chunk);
-    apiRes.on('end', () => {
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed.error) throw new Error(parsed.error.message);
-
-        const results = parsed.items.map(item => ({
-          title: item.snippet.title,
-          videoId: item.id.videoId
+  const data = {
+    query: query,
+  };
+  axios.post('http://localhost:26538/api/v1/search', data)
+    .then((response) => {
+        //console.log(`Status: ${res.status}`);
+        let videos = response.data.contents.tabbedSearchResultsRenderer.tabs[0].tabRenderer.content.sectionListRenderer.contents[1].musicShelfRenderer.contents;
+        let parsed = {
+          videos: []
+        };
+        for (let i = 0; videos.length > i; i++) {
+          let video = videos[i].musicResponsiveListItemRenderer.flexColumns[0].musicResponsiveListItemFlexColumnRenderer.text.runs[0];
+          try {
+            if (video.navigationEndpoint.watchEndpoint.videoId) {
+              //console.log('Title: ', video.text);
+              //console.log('ID: ', video.navigationEndpoint.watchEndpoint.videoId);
+              parsed.videos.push({
+                title: video.text,
+                videoId: video.navigationEndpoint.watchEndpoint.videoId
+              });
+            }
+          } catch (error) {
+            
+          }
+        }
+        const results = parsed.videos.map(video => ({
+            title: video.title,
+            videoId: video.videoId
         }));
+        //console.log(results)
         res.json({ results });
-      } catch (err) {
-        console.warn('YouTube API failed, falling back to yt-dlp search...');
-        fallbackYtDlpSearch(query, res);
-      }
+    }).catch((err) => {
+        console.error(err);
     });
-  }).on('error', err => {
-    console.warn('YouTube API error:', err);
-    fallbackYtDlpSearch(query, res);
-  });
 });
 
 app.post('/api/queue', async (req, res) => {
   const { videoId } = req.body;
-  const downloaded = await downloadSong(videoId);
+  const data = {
+    videoId: videoId,
+    insertPosition: "INSERT_AT_END"
+  };
+  axios.post('http://localhost:26538/api/v1/queue', data)
+    .then((response) => {
+      broadcastQueue();
+    }).catch((err) => {
+      console.error(err);
+    });
+  res.json({ ok: true });
+    //if (!current) playNext();
+  /*const downloaded = await downloadSong(videoId);
   queue.push(downloaded);
   broadcastQueue();
   if (!current) playNext();
@@ -180,45 +182,48 @@ app.post('/api/queue', async (req, res) => {
       await downloadSong(song.videoId);
     }
   }
-  res.json({ ok: true });
+  res.json({ ok: true });*/
 });
 
-// Stream endpoint for playing songs
-app.get('/stream/:filename', (req, res) => {
-  const filename = path.basename(req.params.filename);
-  const filepath = path.join(__dirname, 'songs', filename);
+// Endpoint to stream audio directly
+app.get('/stream', (req, res) => {
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Connection', 'keep-alive'); // Keep the connection open
 
-  if (!fs.existsSync(filepath)) {
-    return res.status(404).send('File not found');
-  }
+  console.log('Starting stream...');
 
-  const stat = fs.statSync(filepath);
-  const fileSize = stat.size;
-  const range = req.headers.range;
+  const ffmpeg = spawn(ffmpegPath, [
+    '-f', 'dshow',
+    '-i', 'audio=Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)',      // Input stream from VLC
+    '-f', 'mp3',             // Output format
+    '-ab', '128k',           // Audio bitrate
+    '-vn',                   // No video
+    'pipe:1'                 // Pipe the output to stdout
+  ]);
 
-  if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunkSize = (end - start) + 1;
+  ffmpeg.on('error', (err) => {
+    console.error('Error starting ffmpeg:', err);
+    res.status(500).send('Error starting audio stream.');
+  });
 
-    const file = fs.createReadStream(filepath, { start, end });
-    const head = {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunkSize,
-      'Content-Type': 'audio/mpeg'
-    };
-    res.writeHead(206, head);
-    file.pipe(res);
-  } else {
-    const head = {
-      'Content-Length': fileSize,
-      'Content-Type': 'audio/mpeg'
-    };
-    res.writeHead(200, head);
-    fs.createReadStream(filepath).pipe(res);
-  }
+  // Update last activity time whenever data is sent
+  ffmpeg.stdout.on('data', () => {
+    //connectedIPs.set(req.normalizedIP, Date.now()); // Update activity time
+  });
+
+  ffmpeg.stdout.pipe(res);
+
+  // When the connection ends (due to client closing the stream)
+  res.on('close', () => {
+    console.log('Client disconnected, stopping stream...');
+    ffmpeg.kill('SIGINT'); // Stop ffmpeg when client disconnects
+
+    // Delay removal of the IP to avoid premature deletions
+    //connectedIPs.delete(req.normalizedIP);
+    //printConnectedIPs();
+  });
 });
 
 io.on('connection', (socket) => {
