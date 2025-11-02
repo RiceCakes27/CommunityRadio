@@ -169,8 +169,7 @@ app.post('/api/queue', async (req, res) => {
   };
   axios.post('http://localhost:26538/api/v1/queue', data)
     .then((response) => {
-      //console.log(response);
-      broadcastQueue();
+      setTimeout(broadcastQueue, 200);
       res.json({ ok: true });
     }).catch((err) => {
       console.error(err);
