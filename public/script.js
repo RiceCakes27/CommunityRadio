@@ -18,7 +18,7 @@ socket.on('message', (raw) => {
     }
     if (data.type === 'update') {
         if (data.current) {
-            nowPlaying.textContent = `Now Playing: ${data.current.title}`;
+            nowPlaying.textContent = `Now Playing: ${data.current.title} - ${data.current.artist}`;
         } else {
             nowPlaying.textContent = 'Nothing playing yet.';
         }

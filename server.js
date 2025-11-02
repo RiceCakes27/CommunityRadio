@@ -65,7 +65,7 @@ async function broadcastQueue(emitter = io.emit.bind(io)) {
     // Map a single song to the expected /api/v1/song shape with safe defaults
     const mapSong = (s) => ({
       title: s?.title ?? (s?.filename ? path.basename(s.filename) : ""),
-      //artist: s?.artist ?? "Unknown Artist",
+      artist: s?.artist ?? "Unknown Artist",
       //views: typeof s?.views === "number" ? s.views : 0,
       //uploadDate: s?.uploadDate ?? "",
       //imageSrc: s?.imageSrc ?? "",
