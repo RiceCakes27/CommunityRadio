@@ -6,7 +6,8 @@ const player = document.getElementById('player');
 
 const socket = io({ path: '/ws' });
 
-player.src = "http://" + window.location.hostname + ":8080/stream";
+player.src = `/stream?nocache=${Date.now()}`;
+player.play();
 
 socket.on('message', (raw) => {
     let data;
@@ -47,34 +48,34 @@ searchInput.addEventListener('input', () => {
         fetch(`/api/search?q=${encodeURIComponent(query)}`)
         .then(res => res.json())
         .then(data => {
-        searchResults.innerHTML = '';
-        if (data.results && data.results.length > 0) {
-            data.results.forEach(song => {
-                const li = document.createElement('li');
-                li.textContent = song.title;
-                li.title = song.title;
-                li.style.userSelect = 'none';
-                li.addEventListener('click', () => {
-                    //document.getElementById('overlay').style.display = 'flex';
+            searchResults.innerHTML = '';
+            if (data.results && data.results.length > 0) {
+                data.results.forEach(song => {
+                    const li = document.createElement('li');
+                    li.textContent = song.title;
+                    li.title = song.title;
+                    li.style.userSelect = 'none';
+                    li.addEventListener('click', () => {
+                        //document.getElementById('overlay').style.display = 'flex';
 
-                    fetch('/api/queue', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ videoId: song.videoId })
-                    }).then(res => {
-                        if (res.ok) {
-                            searchInput.value = '';
-                            searchResults.innerHTML = '';
-                        } else {
-                            alert('Failed to add song to queue');
-                        }
+                        fetch('/api/queue', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ videoId: song.videoId })
+                        }).then(res => {
+                            if (res.ok) {
+                                searchInput.value = '';
+                                searchResults.innerHTML = '';
+                            } else {
+                                alert('Failed to add song to queue');
+                            }
+                        });
                     });
+                    searchResults.appendChild(li);
                 });
-                searchResults.appendChild(li);
-            });
-        } else {
-            searchResults.textContent = 'No results found.';
-        }
+            } else {
+                searchResults.textContent = 'No results found.';
+            }
         }).catch(() => {
             searchResults.textContent = 'Search failed.';
         });

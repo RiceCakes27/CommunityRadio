@@ -1,20 +1,34 @@
+require('dotenv').config();
 const express = require('express');
 const { spawn } = require('child_process');
 const { Server } = require('socket.io');
+const { SMTCMonitor } = require('@coooookies/windows-smtc-monitor');
 const http = require('http');
 const fs = require('fs');
 //const https = require('https');
 const path = require('path');
-require('dotenv').config();
 const axios = require('axios');
 const ffmpegPath = require('ffmpeg-static');
 
 const PORT = process.env.PORT;
 const app = express();
 const server = http.createServer(app);
+const monitor = new SMTCMonitor();
 const io = new Server(server, {
   path: '/ws'
 });
+
+const clients = new Set();
+
+const ffmpeg = spawn(ffmpegPath, [
+	'-f', 'dshow',
+	'-audio_buffer_size', '50',
+	'-i', 'audio=Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)', // Input stream from VLC
+	'-f', 'mp3',                                                  // Output format
+	'-ab', '128k',                                                // Audio bitrate
+	'-vn',                                                        // No video
+	'pipe:1'                                                      // Pipe the output to stdout
+]);
 
 async function broadcastQueue(emitter = io.emit.bind(io)) {
 	try {
@@ -88,6 +102,23 @@ async function broadcastQueue(emitter = io.emit.bind(io)) {
   }
 }
 
+ffmpeg.stdout.on('data', (chunk) => {
+  for (const client of clients) {
+    client.write(chunk);
+  }
+});
+
+ffmpeg.on('error', (err) => {
+	console.error('Error starting ffmpeg:', err);
+	res.status(500).send('Error starting audio stream.');
+});
+
+monitor.on('session-media-changed', (appId) => {
+  if (appId == 'com.github.th-ch.youtube-music') {
+    broadcastQueue();
+  }
+});
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -138,7 +169,7 @@ app.post('/api/queue', async (req, res) => {
   };
   axios.post('http://localhost:26538/api/v1/queue', data)
     .then((response) => {
-      console.log(response);
+      //console.log(response);
       broadcastQueue();
       res.json({ ok: true });
     }).catch((err) => {
@@ -149,32 +180,17 @@ app.post('/api/queue', async (req, res) => {
 // Endpoint to stream audio directly
 app.get('/stream', (req, res) => {
   res.setHeader('Content-Type', 'audio/mpeg');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('Connection', 'keep-alive'); // Keep the connection open
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Connection', 'keep-alive');
+	res.removeHeader('Accept-Ranges');
 
-  console.log('Starting stream...');
-
-  const ffmpeg = spawn(ffmpegPath, [
-    '-f', 'dshow',
-    '-i', 'audio=Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)', // Input stream from VLC
-    '-f', 'mp3',                                                  // Output format
-    '-ab', '128k',                                                // Audio bitrate
-    '-vn',                                                        // No video
-    'pipe:1'                                                      // Pipe the output to stdout
-  ]);
-
-  ffmpeg.on('error', (err) => {
-    console.error('Error starting ffmpeg:', err);
-    res.status(500).send('Error starting audio stream.');
-  });
-
-  ffmpeg.stdout.pipe(res);
-
+  clients.add(res);
+	
   // When the connection ends (due to client closing the stream)
   res.on('close', () => {
-    console.log('Client disconnected, stopping stream...');
-    ffmpeg.kill('SIGINT'); // Stop ffmpeg when client disconnects
+    clients.delete(res);
   });
 });
 
