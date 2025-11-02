@@ -5,7 +5,6 @@ const http = require('http');
 const fs = require('fs');
 //const https = require('https');
 const path = require('path');
-const ffprobe = require('ffprobe-static');
 require('dotenv').config();
 const axios = require('axios');
 const ffmpegPath = require('ffmpeg-static');
@@ -17,12 +16,8 @@ const io = new Server(server, {
   path: '/ws'
 });
 
-let queue = [];
-let current = null;
-let currentTimeout = null;
-
-async function broadcastQueue() {
-  try {
+async function broadcastQueue(emitter = io.emit.bind(io)) {
+	try {
     // Fetch current song and queue in parallel
     const [songRes, queueRes] = await Promise.all([
       axios.get("http://localhost:26538/api/v1/song"),
@@ -31,8 +26,8 @@ async function broadcastQueue() {
 
     // Normalize responses
     const currentRaw = songRes?.data ?? null;
-    //const queueRaw = Array.isArray(queueRes?.data) ? queueRes.data : (queueRes?.data?.items[0].playlistPanelVideoRenderer.title.runs[0] ?? []);
     const items = queueRes?.data?.items ?? [];
+
     // Find index of currently selected item
     const selectedIndex = items.findIndex(
       item => item?.playlistPanelVideoRenderer?.selected === true
@@ -75,7 +70,7 @@ async function broadcastQueue() {
     });
 
     // Emit once, after data is ready
-    io.emit("message", JSON.stringify({
+    emitter("message", JSON.stringify({
       type: "update",
       current,
       queue
@@ -85,35 +80,12 @@ async function broadcastQueue() {
     // Log error and still emit a safe update so clients won't hang
     console.error("broadcastQueue error:", err?.message ?? err);
 
-    io.emit("message", JSON.stringify({
+    emitter("message", JSON.stringify({
       type: "update",
       current: null,
       queue: []
     }));
   }
-}
-
-async function playNext() {
-  if (currentTimeout) {
-    clearTimeout(currentTimeout);
-    currentTimeout = null;
-  }
-
-  if (queue.length === 0) {
-    current = null;
-    startTime = null;
-    broadcastQueue();
-    return;
-  }
-
-  const next = queue.shift();
-  current = next;
-  startTime = Date.now();
-  broadcastQueue();
-
-  currentTimeout = setTimeout(() => {
-    playNext();
-  }, next.durationMs);
 }
 
 app.use(express.json());
@@ -166,23 +138,12 @@ app.post('/api/queue', async (req, res) => {
   };
   axios.post('http://localhost:26538/api/v1/queue', data)
     .then((response) => {
+      console.log(response);
       broadcastQueue();
+      res.json({ ok: true });
     }).catch((err) => {
       console.error(err);
     });
-  res.json({ ok: true });
-    //if (!current) playNext();
-  /*const downloaded = await downloadSong(videoId);
-  queue.push(downloaded);
-  broadcastQueue();
-  if (!current) playNext();
-  else {
-    const nextFive = queue.slice(0, 5);
-    for (const song of nextFive) {
-      await downloadSong(song.videoId);
-    }
-  }
-  res.json({ ok: true });*/
 });
 
 // Endpoint to stream audio directly
@@ -196,21 +157,16 @@ app.get('/stream', (req, res) => {
 
   const ffmpeg = spawn(ffmpegPath, [
     '-f', 'dshow',
-    '-i', 'audio=Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)',      // Input stream from VLC
-    '-f', 'mp3',             // Output format
-    '-ab', '128k',           // Audio bitrate
-    '-vn',                   // No video
-    'pipe:1'                 // Pipe the output to stdout
+    '-i', 'audio=Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)', // Input stream from VLC
+    '-f', 'mp3',                                                  // Output format
+    '-ab', '128k',                                                // Audio bitrate
+    '-vn',                                                        // No video
+    'pipe:1'                                                      // Pipe the output to stdout
   ]);
 
   ffmpeg.on('error', (err) => {
     console.error('Error starting ffmpeg:', err);
     res.status(500).send('Error starting audio stream.');
-  });
-
-  // Update last activity time whenever data is sent
-  ffmpeg.stdout.on('data', () => {
-    //connectedIPs.set(req.normalizedIP, Date.now()); // Update activity time
   });
 
   ffmpeg.stdout.pipe(res);
@@ -219,15 +175,11 @@ app.get('/stream', (req, res) => {
   res.on('close', () => {
     console.log('Client disconnected, stopping stream...');
     ffmpeg.kill('SIGINT'); // Stop ffmpeg when client disconnects
-
-    // Delay removal of the IP to avoid premature deletions
-    //connectedIPs.delete(req.normalizedIP);
-    //printConnectedIPs();
   });
 });
 
 io.on('connection', (socket) => {
-  broadcastQueue();
+  broadcastQueue(socket.emit.bind(socket));
 });
 
 server.listen(PORT, () => console.log('Server listening on port '+PORT));
