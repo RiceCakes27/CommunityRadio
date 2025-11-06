@@ -200,8 +200,3 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, IP, () => console.log('Server listening on port: '+PORT));
-
-['songs', 'public'].forEach(folder => {
-  const dir = path.join(__dirname, folder);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-});
