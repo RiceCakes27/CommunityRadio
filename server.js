@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 const express = require('express');
 const { spawn } = require('child_process');
 const { Server } = require('socket.io');
@@ -10,7 +10,9 @@ const path = require('path');
 const axios = require('axios');
 const ffmpegPath = require('ffmpeg-static');
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
+const IP = process.env.IP || 'localhost';
+
 const app = express();
 const server = http.createServer(app);
 const monitor = new SMTCMonitor();
@@ -197,7 +199,7 @@ io.on('connection', (socket) => {
   broadcastQueue(socket.emit.bind(socket));
 });
 
-server.listen(PORT, () => console.log('Server listening on port '+PORT));
+server.listen(PORT, IP, () => console.log('Server listening on port: '+PORT));
 
 ['songs', 'public'].forEach(folder => {
   const dir = path.join(__dirname, folder);
