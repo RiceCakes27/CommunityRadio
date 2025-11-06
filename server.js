@@ -7,10 +7,12 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 const ffprobe = require('ffprobe-static');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY; // Set this in your environment
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
+const IP = processs.env.IP || 'localhost';
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -225,7 +227,7 @@ io.on('connection', (socket) => {
   broadcastQueue();
 });
 
-server.listen(PORT, () => console.log('Server listening on port '+PORT));
+server.listen(PORT, IP, () => console.log('Server listening on port: '+PORT));
 
 ['songs', 'public'].forEach(folder => {
   const dir = path.join(__dirname, folder);
