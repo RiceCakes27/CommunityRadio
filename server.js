@@ -4,7 +4,6 @@ const { spawn } = require('child_process');
 const { Server } = require('socket.io');
 const { SMTCMonitor } = require('@coooookies/windows-smtc-monitor');
 const http = require('http');
-const fs = require('fs');
 //const https = require('https');
 const path = require('path');
 const axios = require('axios');
@@ -12,12 +11,13 @@ const ffmpegPath = require('ffmpeg-static');
 
 const PORT = process.env.PORT || 3000;
 const IP = process.env.IP || 'localhost';
+const ROOT = process.env.ROOT || '/radio';
 
 const app = express();
 const server = http.createServer(app);
 const monitor = new SMTCMonitor();
 const io = new Server(server, {
-  path: '/ws'
+  path: ROOT+'/ws'
 });
 
 const clients = new Set();
@@ -25,11 +25,11 @@ const clients = new Set();
 const ffmpeg = spawn(ffmpegPath, [
 	'-f', 'dshow',
 	'-audio_buffer_size', '50',
-	'-i', 'audio=Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)', // Input stream from VLC
-	'-f', 'mp3',                                                  // Output format
-	'-ab', '128k',                                                // Audio bitrate
-	'-vn',                                                        // No video
-	'pipe:1'                                                      // Pipe the output to stdout
+	'-i', 'audio=CABLE Output (VB-Audio Virtual Cable)', // Input stream from VLC
+	'-f', 'mp3',                                         // Output format
+	'-ab', '128k',                                       // Audio bitrate
+	'-vn',                                               // No video
+	'pipe:1'                                             // Pipe the output to stdout
 ]);
 
 async function broadcastQueue(emitter = io.emit.bind(io)) {
@@ -110,6 +110,11 @@ ffmpeg.stdout.on('data', (chunk) => {
   }
 });
 
+ffmpeg.stderr.on("data", (data) => {
+    const msg = data.toString();
+    if (msg.match(/error/i)) console.error("[FFMPEG]", msg);
+});
+
 ffmpeg.on('error', (err) => {
 	console.error('Error starting ffmpeg:', err);
 	res.status(500).send('Error starting audio stream.');
@@ -122,9 +127,9 @@ monitor.on('session-media-changed', (appId) => {
 });
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(ROOT, express.static('public'));
 
-app.get('/api/search', async (req, res) => {
+app.get(ROOT+'/api/search', async (req, res) => {
   const query = req.query.q;
   if (!query) return res.json({ results: [] });
   const data = {
@@ -163,7 +168,7 @@ app.get('/api/search', async (req, res) => {
     });
 });
 
-app.post('/api/queue', async (req, res) => {
+app.post(ROOT+'/api/queue', async (req, res) => {
   const { videoId } = req.body;
   const data = {
     videoId: videoId,
@@ -179,7 +184,7 @@ app.post('/api/queue', async (req, res) => {
 });
 
 // Endpoint to stream audio directly
-app.get('/stream', (req, res) => {
+app.get(ROOT+'/stream', (req, res) => {
   res.setHeader('Content-Type', 'audio/mpeg');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');

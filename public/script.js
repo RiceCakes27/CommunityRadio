@@ -4,9 +4,8 @@ const nowPlaying = document.getElementById('nowPlaying');
 const queueList = document.getElementById('queueList');
 const player = document.getElementById('player');
 
-const socket = io({ path: '/ws' });
-
-player.src = `/stream?nocache=${Date.now()}`;
+const socket = io({ path: location.pathname+'ws' });
+player.src = location+`stream?nocache=${Date.now()}`;
 player.play();
 
 socket.on('message', (raw) => {
@@ -45,7 +44,7 @@ searchInput.addEventListener('input', () => {
         return;
     }
     searchTimeout = setTimeout(() => {
-        fetch(`/api/search?q=${encodeURIComponent(query)}`)
+        fetch(`api/search?q=${encodeURIComponent(query)}`)
         .then(res => res.json())
         .then(data => {
             searchResults.innerHTML = '';
@@ -58,7 +57,7 @@ searchInput.addEventListener('input', () => {
                     li.addEventListener('click', () => {
                         //document.getElementById('overlay').style.display = 'flex';
 
-                        fetch('/api/queue', {
+                        fetch('api/queue', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ videoId: song.videoId })
